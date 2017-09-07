@@ -1,65 +1,244 @@
-from struct import Struct, calcsize
+import csv
+from decimal import Decimal
 from datetime import datetime
+from collections import OrderedDict
 
-import petl as etl
+import petl
+import click
+from passyunk.parser import PassyunkParser
 
-from util import (construct_layout, get_active_header)
+passyunk_parser = PassyunkParser()
 
-LAYOUT = [
-    { 'start': 0,   'end': 11,  'name': 'ticket' },
-    { 'start': 11,  'end': 21,  'name': 'issue_date' },
-    { 'start': 21,  'end': 26,  'name': 'issue_time' },
-    { 'start': 26,  'end': 28,  'name': 'state' },
-    { 'start': 28,  'end': 36,  'name': 'plate' },
-    { 'start': 36,  'end': 40,  'name': 'division' },
-    { 'start': 40,  'end': 75,  'name': 'location' },
-    { 'start': 75,  'end': 95,  'name': 'violation_desc' },
-    { 'start': 95,  'end': 104, 'name': 'fine' },
-    { 'start': 104, 'end': 110, 'name': 'issuing_agency' },
-]
+fieldmap = OrderedDict([
+    ('ticket_number', {
+        'type': 'string',
+        'start_pos': 0,
+        'end_pos': 11
+    }),
+    ('issue_datetime', {
+        'type': 'datetime',
+        'start_pos': 11,
+        'end_pos': 26
+    }),
+    ('state', {
+        'type': 'string',
+        'start_pos': 26,
+        'end_pos': 28
+    }),
+    ('plate', {
+        'type': 'string',
+        'start_pos': 28,
+        'end_pos': 36
+    }),
+    ('division', {
+        'type': 'string',
+        'start_pos': 36,
+        'end_pos': 40
+    }),
+    ('location', {
+        'type': 'string',
+        'start_pos': 40,
+        'end_pos': 75
+    }),
+    ('violation_desc', {
+        'type': 'string',
+        'start_pos': 75,
+        'end_pos': 95
+    }),
+    ('fine', {
+        'type': 'decimal',
+        'start_pos': 95,
+        'end_pos': 104
+    }),
+    ('issuing_agency', {
+        'type': 'string',
+        'start_pos': 104,
+        'end_pos': 112
+    })
+])
 
-layout = construct_layout(LAYOUT)
-header = get_active_header(LAYOUT)
+latlon_fieldmap = OrderedDict([
+    ('lat', {
+        'type': 'latlon',
+        'start_pos': 112,
+        'end_pos': 122
+    }),
+    ('lon', {
+        'type': 'latlon',
+        'start_pos': 122,
+        'end_pos': 132
+    })
+])
 
-unpack = Struct(layout).unpack_from
-struct_length = calcsize(layout)
+headers = list(fieldmap.keys())
+headers_with_latlon = list(fieldmap.keys() + latlon_fieldmap.keys())
 
-def unpack_line (line):
-    packed_data = line[0] # etl.fromtext returns a list of lists w/1 item
+def parse_lat_lon(value):
+    value = float(value)
+    if value == 0.0:
+        return None
+    return value
 
-    # Ensure string length is what deconstructer expects
-    if len(packed_data) != struct_length:
-        packed_data = '{:<{}s}'.format(packed_data.decode(), struct_length).encode()
+def parse_datetime(value):
+    if value[-5:] == '24:00':
+        value = value[:-5] + '23:59'
+    return datetime.strptime(value, '%m/%d/%Y%H:%M')
 
-    row = unpack(packed_data)
+typemap = {
+    'integer': int,
+    'string': lambda x: x.strip(),
+    'decimal': lambda x: Decimal(x.replace(',','')),
+    'numeric': float,
+    'datetime': parse_datetime,
+    'latlon': parse_lat_lon
+}
 
-    # Trim whitespace in each field
-    row = [field.strip() for field in row]
-
-    return row
-
-def create_date_time (row):
-    date_time = row['issue_date'] + ' ' + row['issue_time']
-    return datetime.strptime(date_time, '%m/%d/%Y %H:%M').strftime('%Y-%m-%d %H:%M:%S')
-
-def remove_ppa_division (division, row):
-    if row['issuing_agency'] == 'PPA':
-        return ''
+def get_transform_row(latlon_input):
+    if latlon_input:
+        input_fieldmap = fieldmap + latlon_fieldmap
     else:
-        return division
+        input_fieldmap = fieldmap 
 
-def fix_prisons_agency (issuing_agency):
-    if issuing_agency == 'RED LI':
-        return 'PRISONS'
+    def transform_row(line):
+        row = OrderedDict()
+        for field in input_fieldmap.keys():
+            config = input_fieldmap[field]
+            row[field] = typemap[config['type']]\
+                            (line[0][config['start_pos']:config['end_pos']])
+
+        if not latlon_input:
+            row['lat'] = None
+            row['lon'] = None
+
+        if (row['division'] == '0000' or row['division'] == '00'):
+            row['division'] = None
+
+        if row['issuing_agency'] == 'RED LI':
+            row['issuing_agency'] = 'PRISON'
+
+        if row['issuing_agency'] != 'PPA':
+            row['division'] = None
+
+        return row.values()
+
+    return transform_row
+
+plates = None
+plates_counter = None
+ticket_numbers = None
+ticket_numbers_counter = None
+centriods = None
+
+def anonymize(row):
+    global plates_counter, ticket_numbers_counter
+
+    out_row = list(row)
+
+    plate_key = row[2] + row[3]
+    if plate_key in plates:
+        out_row[3] = plates[plate_key]
     else:
-        return issuing_agency
+        plates_counter += 1
+        plates[plate_key] = plates_counter
+        out_row[3] = plates_counter
 
-# Main
-table = etl.fromtext(strip=False)\
-            .rowmap(unpack_line, header=header, failonerror=True)\
-            .convert('fine', float)\
-            .addfield('issue_date_and_time', create_date_time)\
-            .select('{issue_date_and_time} >= "2012-01-01" and {fine} > 0')\
-            .convert('division', remove_ppa_division, pass_row=True)\
-            .convert('issuing_agency', fix_prisons_agency)
-print(etl.dicts(table))
+    if row[0] in ticket_numbers:
+        out_row[0] = ticket_numbers[row[0]]
+    else:
+        ticket_numbers_counter += 1
+        ticket_numbers[row[0]] = ticket_numbers_counter
+        out_row[0] = ticket_numbers_counter
+
+    return out_row
+
+def geocode(row):
+    out_row = list(row)
+
+    address_components = passyunk_parser.parse(row[5])
+    out_row[5] = address_components['components']['output_address']
+
+    ## No GPS lat/lon
+    if row[9] == None and address_components['components']['cl_seg_id'] != None:
+        if address_components['components']['cl_seg_id'] in centriods:
+            lat_lon = centriods[address_components['components']['cl_seg_id']]
+            out_row[9] = lat_lon[0]
+            out_row[10] = lat_lon[1]
+            row[10] = False
+        else:
+            ## TODO: !!!
+            print('!!! {} not found'.format(address_components['components']['cl_seg_id']))
+    else:
+        row[10] = True
+
+    return out_row
+
+def load_index_file(path):
+    if path == None:
+        return {}
+
+    ## TODO: S3 support
+
+    ## TODO: !!! plate has multiple cols
+
+    with open(path) as file:
+        reader = csv.reader(file)
+        next(reader) # skip headers
+
+        index = {}
+        for row in reader:
+            if len(row) > 2:
+                index[row[0]] = row[1:]
+            else:
+                index[row[0]] = row[1]
+
+        return index
+
+def save_index_file(path, index, headers):
+    with open(path) as file:
+        writer = csv.writer(file)
+
+        writer.write(headers)
+
+        for key, value in index.items():
+            if isinstance(value, list):
+                writer.write([key] + value)
+            else:
+                writer.write([key] + [value])
+
+@click.command()
+@click.option('--plates-file')
+@click.option('--ticket-numbers-file')
+@click.option('--centriod-file')
+@click.option('--latlon-input/--no-latlon-input', is_flag=True, default=True)
+def main(plates_file, ticket_numbers_file, centriod_file, latlon_input):
+    global plates, plates_counter, ticket_numbers, ticket_numbers_counter, centriods
+
+    plates = load_index_file(plates_file)
+    plate_numbers_values = plates.values()
+    if len(plate_numbers_values) > 0:
+        plates_counter = max(plate_numbers_values)
+    else:
+        plates_counter = 0
+
+    ticket_numbers = load_index_file(ticket_numbers_file)
+    ticket_numbers_values = ticket_numbers.values()
+    if len(ticket_numbers_values) > 0:
+        ticket_numbers_counter = max(ticket_numbers_values)
+    else:
+        ticket_numbers_counter = 0
+
+    centriods = load_index_file(centriod_file)
+
+    petl\
+        .fromtext(strip=False)\
+        .rowmap(get_transform_row(latlon_input), header=headers_with_latlon, failonerror=True)\
+        .select('{fine} > 0.0')\
+        .rowmap(anonymize, header=headers_with_latlon, failonerror=True)\
+        .rowmap(geocode, header=headers_with_latlon + ['gps'], failonerror=True)\
+        .tocsv()
+
+    save_index_file(plates_file, plates, ['plate_id', 'plate'])
+    save_index_file(ticket_numbers_file, ticket_numbers)
+
+if __name__ == '__main__':
+    main()
