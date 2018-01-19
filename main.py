@@ -38,6 +38,7 @@ geocode_stats = {
     'total': 0,
     'success': 0,
     'gps': 0,
+    'zip': 0,
     'failed_address': 0,
     'failed_segment': 0,
     'failed_segments': set()
@@ -103,6 +104,9 @@ fieldmap = OrderedDict([
     }),
     ('gps', {
         'type': 'boolean'
+    }),
+    ('zip_code', {
+        'type': 'string'
     })
 ])
 
@@ -199,6 +203,9 @@ def geocode(row):
 
     address_components = passyunk_parser.parse(row[5])
     out_row[5] = address_components['components']['output_address']
+    out_row[11] = address_components['components']['mailing']['zipcode']
+    if out_row[11]:
+        geocode_stats['zip'] += 1
 
     geocode_stats['total'] += 1
 
@@ -209,7 +216,7 @@ def geocode(row):
             lat_lon = centriods[address_components['components']['cl_seg_id']]
             out_row[9] = lat_lon['Lat']
             out_row[10] = lat_lon['lon']
-            out_row[11] = False
+            out_row[12] = False
             geocode_stats['success'] += 1
         else:
             if address_components['components']['cl_seg_id'] != None:
@@ -224,7 +231,7 @@ def geocode(row):
             logger.info('Geocode - {} not found'.format(segment or row[5]))
     else:
         geocode_stats['gps'] += 1
-        out_row[10] = True
+        out_row[12] = True
 
     return out_row
 
@@ -302,14 +309,15 @@ def main(plates_file, ticket_numbers_file, centriod_file, latlon_input, deduplic
         .rowmap(get_transform_row(latlon_input), header=headers, failonerror=True)
         .select('{fine} > 0.0')
         .rowmap(anonymize, header=headers, failonerror=True)
-        .rowmap(geocode, header=headers + ['gps'], failonerror=True)
+        .rowmap(geocode, header=headers, failonerror=True)
         .tocsv()
     )
 
-    logger.info('Geocode stats - success rate: {:.2%}, successes: {}, gps: {}, failed_segment: {}, failed_address: {}'.format(
+    logger.info('Geocode stats - success rate: {:.2%}, successes: {}, gps: {}, zip: {}, failed_segment: {}, failed_address: {}'.format(
         geocode_stats['success'] / geocode_stats['total'],
         geocode_stats['success'],
         geocode_stats['gps'],
+        geocode_stats['zip'],
         geocode_stats['failed_segment'],
         geocode_stats['failed_address']))
 
