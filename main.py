@@ -203,8 +203,8 @@ def geocode(row):
 
     address_components = passyunk_parser.parse(row[5])
     out_row[5] = address_components['components']['output_address']
-    out_row[11] = address_components['components']['mailing']['zipcode']
-    if out_row[11]:
+    out_row[12] = address_components['components']['mailing']['zipcode']
+    if out_row[12]:
         geocode_stats['zip'] += 1
 
     geocode_stats['total'] += 1
@@ -216,7 +216,7 @@ def geocode(row):
             lat_lon = centriods[address_components['components']['cl_seg_id']]
             out_row[9] = lat_lon['Lat']
             out_row[10] = lat_lon['lon']
-            out_row[12] = False
+            out_row[11] = False
             geocode_stats['success'] += 1
         else:
             if address_components['components']['cl_seg_id'] != None:
@@ -231,7 +231,7 @@ def geocode(row):
             logger.info('Geocode - {} not found'.format(segment or row[5]))
     else:
         geocode_stats['gps'] += 1
-        out_row[12] = True
+        out_row[11] = True
 
     return out_row
 
@@ -307,7 +307,7 @@ def main(plates_file, ticket_numbers_file, centriod_file, latlon_input, deduplic
         petl
         .fromtext(strip=False)
         .rowmap(get_transform_row(latlon_input), header=headers, failonerror=True)
-        .select('{fine} > 0.0')
+        .select('{fine} > 0.0 and {issue_datetime} >= 2012-01-01T00:00:00')
         .rowmap(anonymize, header=headers, failonerror=True)
         .rowmap(geocode, header=headers, failonerror=True)
         .tocsv()
