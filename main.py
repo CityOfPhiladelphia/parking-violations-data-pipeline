@@ -47,7 +47,7 @@ geocode_stats = {
 passyunk_parser = PassyunkParser()
 
 fieldmap = OrderedDict([
-    ('ticket_number', {
+    ('anon_ticket_number', {
         'type': 'string',
         'start_pos': 0,
         'end_pos': 11
@@ -62,7 +62,7 @@ fieldmap = OrderedDict([
         'start_pos': 26,
         'end_pos': 28
     }),
-    ('plate', {
+    ('anon_plate_id', {
         'type': 'string',
         'start_pos': 28,
         'end_pos': 36
