@@ -8,6 +8,8 @@ Takes raw data from parking ticket database exports and:
 
 Note: Parking tickets and plates CSVs are backed up in s3://phl-data-dropbox/sftp/Parking_Violations/. Centroids file can be obtained from CityGeo.
 
+Files can be local or use `s3://{bucket}/{key}` notation to access S3 files.
+
 ### Usage
 
 ```sh
