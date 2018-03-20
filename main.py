@@ -32,8 +32,7 @@ plates = None
 plates_counter = None
 ticket_numbers = None
 ticket_numbers_counter = None
-centriods = None
-dedup = False
+centroids = None
 geocode_stats = {
     'total': 0,
     'success': 0,
@@ -182,13 +181,7 @@ def anonymize(row):
 
     ticket_number = row[0]
     if ticket_number in ticket_numbers:
-        if dedup is True:
-            ticket_numbers_counter += 1
-            ticket_numbers[ticket_number + 'E'] = ticket_numbers_counter
-            logger.info('Duplicate detected on ticket number {} - Adding {}E'.format(
-                ticket_number, ticket_number))
-        else:
-            out_row[0] = ticket_numbers[ticket_number]
+        out_row[0] = ticket_numbers[ticket_number]
     else:
         ticket_numbers_counter += 1
         ticket_numbers[ticket_number] = ticket_numbers_counter
@@ -212,8 +205,8 @@ def geocode(row):
     ## No GPS lat/lon
     if row[9] == None:
         if address_components['components']['cl_seg_id'] != None and \
-           address_components['components']['cl_seg_id'] in centriods:
-            lat_lon = centriods[address_components['components']['cl_seg_id']]
+           address_components['components']['cl_seg_id'] in centroids:
+            lat_lon = centroids[address_components['components']['cl_seg_id']]
             out_row[9] = lat_lon['Lat']
             out_row[10] = lat_lon['lon']
             out_row[11] = False
@@ -248,7 +241,7 @@ def load_index_file(path, _type):
                 index[row['state'] + row['plate']] = row
             elif _type == 'license_file':
                 index[row['ticket_number']] = row['anon_ticket_number']
-            elif _type == 'centriod_file':
+            elif _type == 'centroid_file':
                 index[row['SEG_ID']] = row
             else:
                 raise Exception('`{}` not a supported index file type'.format(_type))
@@ -273,15 +266,12 @@ def save_index_file(path, index, headers, _type):
 @click.command()
 @click.option('--plates-file')
 @click.option('--ticket-numbers-file')
-@click.option('--centriod-file')
+@click.option('--centroid-file')
 @click.option('--latlon-input/--no-latlon-input', is_flag=True, default=True)
-@click.option('--deduplicate/--no-deduplicate', is_flag=True, default=False, help="Add 'E' to the end of duplicate ticket numbers")
-def main(plates_file, ticket_numbers_file, centriod_file, latlon_input, deduplicate):
-    global logger, plates, plates_counter, ticket_numbers, ticket_numbers_counter, centriods, dedup
+def main(plates_file, ticket_numbers_file, centroid_file, latlon_input,):
+    global logger, plates, plates_counter, ticket_numbers, ticket_numbers_counter, centroids
 
     logger = get_logging()
-
-    dedup = deduplicate
 
     plates = load_index_file(plates_file, 'plates_file')
     plate_numbers_values = plates.values()
@@ -301,20 +291,20 @@ def main(plates_file, ticket_numbers_file, centriod_file, latlon_input, deduplic
 
     logger.info('Ticket number autoincrement starting at: {}'.format(ticket_numbers_counter))
 
-    centriods = load_index_file(centriod_file, 'centriod_file')
+    centroids = load_index_file(centroid_file, 'centroid_file')
 
     (
         petl
         .fromtext(strip=False)
         .rowmap(get_transform_row(latlon_input), header=headers, failonerror=True)
-        .select('{fine} > 0.0 and {issue_datetime} >= 2012-01-01T00:00:00')
+        .select('{fine} > 0.0 and ({issue_datetime}).isoformat() >= "2012-01-01T00:00:00Z"')
         .rowmap(anonymize, header=headers, failonerror=True)
         .rowmap(geocode, header=headers, failonerror=True)
         .tocsv()
     )
 
     logger.info('Geocode stats - success rate: {:.2%}, successes: {}, gps: {}, zip: {}, failed_segment: {}, failed_address: {}'.format(
-        geocode_stats['success'] / geocode_stats['total'],
+        geocode_stats['success'] / (geocode_stats['total'] - geocode_stats['gps']),
         geocode_stats['success'],
         geocode_stats['gps'],
         geocode_stats['zip'],
