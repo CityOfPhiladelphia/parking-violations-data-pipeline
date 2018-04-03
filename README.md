@@ -21,3 +21,5 @@ If this is an old file, with not latitude and longitude columns, use:
 ```sh
 cat input_raw_data.txt | python main.py --plates-file plates.csv --ticket-numbers-file tickets.csv --centroid-file street_centroid.csv --no-latlon-input
 ```
+
+This will output the transformed parking violation records to stdout and update `plates-file` and `ticket-numbers-file` in-place with new plates and ticket numbers.
